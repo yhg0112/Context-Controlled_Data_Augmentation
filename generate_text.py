@@ -1,42 +1,38 @@
-import os
-import json
+import argparse
+import jsonlines
 
 import torch
 from tqdm import tqdm
 from datasets import load_dataset
-from transformers import T5TokenizerFast, T5ForConditionalGeneration
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 
 
-DATA_DIR = './data/text_gen/'
-MODEL_DIR = './models/text_gen/'
+DATA_CACHE_DIR = "./data/.cache"
 
 
-def main():
+def main(args):
     device = torch.device("cuda")
-    yelp_dataset_7 = load_dataset("./masked_yelp_5.py", cache_dir=DATA_DIR, name="masked_yelp_7")
 
-    model_name_or_path = "./models/text_gen/masked_yelp_full/t5-v1_1-small_text_generation_ft_p7/checkpoint-50500/"
-
-    gen_tokenizer = T5TokenizerFast.from_pretrained(model_name_or_path)
-    gen_model_7 = T5ForConditionalGeneration.from_pretrained(model_name_or_path).to(device)
-    gen_model_7.config.max_length = 512
+    gen_tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
+    gen_model = AutoModelForSeq2SeqLM.from_pretrained(args.model_name_or_path).to(device)
+    # gen_model.config.max_length = 512
 
     prefixes = ["generate negative texts: ",
                 "generate negative texts: ",
                 "generate neutral texts: ",
                 "generate positive texts: ",
                 "generate positive texts: "]
+    # prefixes = ["generate 1 star texts: ",
+    #             "generate 2 star texts: ",
+    #             "generate 3 star texts: ",
+    #             "generate 4 star texts: ",
+    #             "generate 5 star texts: "]
 
-    def load_tokenized_dataset(raw_dataset, tokenizer, max_len=256):
+    def load_tokenized_dataset(raw_dataset, tokenizer, max_len):
 
         def preprocess_function(examples):
             sentiments = examples['label']
             masked_sentences = examples['masked_text']
-            # prefixes = ["generate 1 star texts: ",
-            #             "generate 2 star texts: ",
-            #             "generate 3 star texts: ",
-            #             "generate 4 star texts: ",
-            #             "generate 5 star texts: "]
 
             sentences_with_prefix = []
             for sent, masked in zip(sentiments, masked_sentences):
@@ -57,82 +53,60 @@ def main():
 
         return tokenized_datasets
 
+    yelp_dataset = load_dataset('json', data_files=args.in_data, cache_dir=DATA_CACHE_DIR)
+    tokenized_yelp_dataset = load_tokenized_dataset(yelp_dataset, tokenizer=gen_tokenizer, max_len=args.max_len)
 
-    tokenized_yelp_dataset_7 = load_tokenized_dataset(yelp_dataset_7, tokenizer=gen_tokenizer, max_len=512)
+    masked_texts = tokenized_yelp_dataset["train"]['masked_text']
+    original_label = tokenized_yelp_dataset["train"]['label']
 
-    masked_texts = tokenized_yelp_dataset_7["test"]['masked_text']
-    original_label = tokenized_yelp_dataset_7["test"]['label']
-
-
-    batch_size = 32
-    generated_outputs_7 = []
-    generated_labels_7 = []
+    generated_outputs = []
+    generated_labels = []
     with torch.no_grad():
-        for i in tqdm(range((len(masked_texts) // batch_size) + 1), desc='generate'):
-            batch_masked_texts = masked_texts[i*batch_size:(i+1)*batch_size]
-            batch_label = original_label[i*batch_size:(i+1)*batch_size]
+        for i in tqdm(range((len(masked_texts) // args.batch_size) + 1), desc='generate'):
+            batch_masked_texts = masked_texts[i*args.batch_size:(i+1)*args.batch_size]
+            batch_label = original_label[i*args.batch_size:(i+1)*args.batch_size]
 
             # add prefix
-            for j, (text, label) in enumerate(zip(batch_masked_texts, batch_label)):
+            for j, label in enumerate(batch_label):
+                if args.flip_label:
+                    if label < 2:
+                        label = 4
+                    elif label == 2:
+                        label = 2
+                    else:
+                        label = 0
+                    batch_label[j] = label
                 batch_masked_texts[j] = prefixes[label] + batch_masked_texts[j]
             encoded_texts = gen_tokenizer(batch_masked_texts,
                                         padding=True,
                                         return_tensors="pt").to(device)
 
-            outs = gen_model_7.generate(**encoded_texts, num_beams=4, typical_p=0.2, do_sample=True)
+            outs = gen_model.generate(**encoded_texts, num_beams=4, typical_p=0.2, do_sample=True)
             batch_decoded = gen_tokenizer.batch_decode(outs, skip_special_tokens=True)
-            generated_outputs_7 += batch_decoded
-            generated_labels_7 += batch_label
-
-    batch_size = 32
-    generated_outputs_7_opp = []
-    generated_labels_7_opp = []
-    with torch.no_grad():
-        for i in tqdm(range((len(masked_texts) // batch_size) + 1), desc='generate'):
-            batch_masked_texts = masked_texts[i*batch_size:(i+1)*batch_size]
-            batch_label = original_label[i*batch_size:(i+1)*batch_size]
-            batch_label_opp = []
-
-            # add prefix
-            for j, (text, label) in enumerate(zip(batch_masked_texts, batch_label)):
-                if label < 2:
-                    opp_label = 4
-                elif label == 2:
-                    opp_label = 2
-                else:
-                    opp_label = 0
-                batch_label_opp.append(opp_label)
-                batch_masked_texts[j] = prefixes[opp_label] + batch_masked_texts[j]
-            encoded_texts = gen_tokenizer(batch_masked_texts,
-                                        padding=True,
-                                        return_tensors="pt").to(device)
-
-            outs = gen_model_7.generate(**encoded_texts, num_beams=4, typical_p=0.2, do_sample=True)
-            batch_decoded = gen_tokenizer.batch_decode(outs, skip_special_tokens=True)
-            generated_outputs_7_opp += batch_decoded
-            generated_labels_7_opp += batch_label
-
+            generated_outputs += batch_decoded
+            generated_labels += batch_label
 
     # save the generated texts:
-    generated_dataset_7 = []
-    for i in range(len(generated_outputs_7)):
-        ex = {}
-        ex['text'] = generated_outputs_7[i]
-        ex['label'] = generated_labels_7[i]
-        generated_dataset_7.append(ex)
+    generated_dataset = []
+    for i in range(len(generated_outputs)):
+        ex = {
+            'text': generated_outputs[i],
+            'label': generated_labels[i],
+        }
+        generated_dataset.append(ex)
 
-    generated_dataset_7_opp = []
-    for i in range(len(generated_outputs_7_opp)):
-        ex = {}
-        ex['text'] = generated_outputs_7_opp[i]
-        ex['label'] = generated_labels_7_opp[i]
-        generated_dataset_7_opp.append(ex)
-
-    with open(os.path.join(DATA_DIR, "generated_yelp_7_again.json"), 'w') as json_file:
-        json.dump(generated_dataset_7, json_file)
-    with open(os.path.join(DATA_DIR, "generated_yelp_7_opp_again.json"), 'w') as json_file:
-        json.dump(generated_dataset_7_opp, json_file)
+    with jsonlines.open(args.out_data, 'w') as writer:
+        writer.write_all(generated_dataset)
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--model_name_or_path', type=str, required=True)
+    parser.add_argument('--in_data', type=str, required=True)
+    parser.add_argument('--out_data', type=str, required=True)
+    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--max_len', type=int, default=512)
+    parser.add_argument('--flip_label', action='store_true')
+    args = parser.parse_args()
+    print(args)
+    main(args)
