@@ -1,13 +1,12 @@
-import os
 import numpy as np
 
-from transformers import AutoTokenizer, T5TokenizerFast, T5ForConditionalGeneration
-from transformers import DataCollatorForSeq2Seq, Seq2SeqTrainingArguments, Seq2SeqTrainer
-import datasets
+from datasets import load_dataset, load_metric
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, HfArgumentParser, DataCollatorForSeq2Seq, \
+    Seq2SeqTrainingArguments, Seq2SeqTrainer
 
 
-DATA_DIR = './data/text_gen/'
-MODEL_DIR = './models/text_gen/'
+DATA_CACHE_DIR = "./data/.cache"
+MODEL_CACHE_DIR = './models/.cache'
 
 
 def load_tokenized_dataset(raw_dataset, tokenizer, max_len=256):
@@ -47,46 +46,21 @@ def postprocess_text(preds, labels):
     return preds, labels
 
 
-def main():
-    batch_size = 16
-    model_name = 't5-v1_1-small_text_generation_ft_p7'
-    args = Seq2SeqTrainingArguments(
-        output_dir=os.path.join(MODEL_DIR, "masked_yelp_full", model_name),
-        evaluation_strategy="steps",
-        eval_steps=10000,
-        learning_rate=3e-4,
-        warmup_steps=50,
-        per_device_train_batch_size=batch_size,
-        per_device_eval_batch_size=batch_size*4,
-        gradient_accumulation_steps=4,
-        weight_decay=0.01,
-        save_total_limit=15,
-        num_train_epochs=5,
-        predict_with_generate=True,
-        fp16=False,
-        push_to_hub=False,
-        metric_for_best_model='bleu'
-    )
-
-    gen_model = T5ForConditionalGeneration.from_pretrained("google/t5-v1_1-small", cache_dir=MODEL_DIR)
-    gen_tokenizer = T5TokenizerFast.from_pretrained("google/t5-v1_1-small", cache_dir=MODEL_DIR) # ==> SentencePiece
-    roberta_tokenizer = AutoTokenizer.from_pretrained('roberta-base') # ==> BPE, XLNET # WordPiece
+def main(args, training_args):
+    gen_model = AutoModelForSeq2SeqLM.from_pretrained(args.model_name_or_path, cache_dir=MODEL_CACHE_DIR)
+    gen_tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, cache_dir=MODEL_CACHE_DIR) # ==> SentencePiece
+    # roberta_tokenizer = AutoTokenizer.from_pretrained('roberta-base') # ==> BPE, XLNET # WordPiece
     gen_model.config.max_length = 512
 
-
-    # add roberta's mask_toekn to the t5 tokenizer and increase the embedding size.
-    mask_token_dict = {'mask_token': roberta_tokenizer.mask_token}
-    num_added_toks = gen_tokenizer.add_special_tokens(mask_token_dict)
+    # add roberta's mask_token to the t5 tokenizer and increase the embedding size.
     gen_model.resize_token_embeddings(len(gen_tokenizer))
 
-
-    yelp_dataset_7 = datasets.load_dataset("./masked_yelp_5.py", cache_dir=DATA_DIR, name="masked_yelp_7")
-    tokenized_yelp_dataset_7 = load_tokenized_dataset(yelp_dataset_7, tokenizer=gen_tokenizer, max_len=512)
-
+    yelp_dataset = load_dataset('json', data_files=args.in_data, cache_dir=DATA_CACHE_DIR)
+    tokenized_yelp_dataset = load_tokenized_dataset(yelp_dataset, tokenizer=gen_tokenizer, max_len=512)
 
     data_collator = DataCollatorForSeq2Seq(gen_tokenizer, padding=True)
 
-    metric = datasets.load_metric("sacrebleu", DATA_DIR)
+    metric = load_metric("sacrebleu", DATA_CACHE_DIR)
 
     def compute_metrics(eval_preds):
         preds, labels = eval_preds
@@ -112,9 +86,9 @@ def main():
 
     trainer = Seq2SeqTrainer(
         gen_model,
-        args,
-        train_dataset=tokenized_yelp_dataset_7["train"].remove_columns("label"),
-        eval_dataset=tokenized_yelp_dataset_7["test"].remove_columns("label"),
+        training_args,
+        train_dataset=tokenized_yelp_dataset["train"].remove_columns("label"),
+        eval_dataset=tokenized_yelp_dataset["train"].remove_columns("label"),  # TODO what split to use for eval?
         data_collator=data_collator,
         tokenizer=gen_tokenizer,
         compute_metrics=compute_metrics
@@ -123,4 +97,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = HfArgumentParser((Seq2SeqTrainingArguments,))
+    parser.add_argument('--in_data', type=str, required=True)
+    parser.add_argument('--model_name_or_path', type=str, required=True)
+    training_args, additional_args = parser.parse_args_into_dataclasses()
+    main(additional_args, training_args)
