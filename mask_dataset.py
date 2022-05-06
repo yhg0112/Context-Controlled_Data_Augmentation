@@ -1,13 +1,15 @@
-import os
-import json
-from pathlib import Path
+import argparse
+import jsonlines
 
 import torch
-import datasets
 import numpy as np
 from tqdm import tqdm
+from datasets import load_dataset
 from nltk.tokenize import sent_tokenize
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+
+DATA_CACHE_DIR = "./data/.cache"
 
 
 softmax = torch.nn.Softmax(dim=-1)
@@ -19,30 +21,20 @@ def sent_tokenize_and_strip(sentences):
     return [s.strip() for s in sent_tokenize(sentences)]
 
 
-DATA_DIR = './data/text_gen/'
-MODEL_DIR = Path('./models/text_gen/')
-
-
-def main():
+def main(args):
     device = torch.device("cuda")
 
     print('Loading model...')
-    # model_name_or_path = 'roberta-base'
-    # model_name_or_path = MODEL_DIR / 'yelp_full/roberta_tc_results/checkpoint-128000/'
-    model_name_or_path = MODEL_DIR / 'yelp_full/roberta_tc_results/checkpoint-1500/'
-    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
-    sentiment_model = AutoModelForSequenceClassification.from_pretrained(model_name_or_path).to(device)
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
+    sentiment_model = AutoModelForSequenceClassification.from_pretrained(args.model_name_or_path).to(device)
 
     def embed(sentences):
-        max_len=512
         with torch.no_grad():
-            tokenized = tokenizer(sentences, padding=True, max_length=max_len, return_tensors='pt').to(device)
-            rslt = sentiment_model(tokenized['input_ids'][:,:max_len])
+            tokenized = tokenizer(sentences, padding=True, max_length=args.max_len, return_tensors='pt').to(device)
+            rslt = sentiment_model(tokenized['input_ids'][:,:args.max_len])
             return softmax(rslt['logits'])
 
-    yelp_dataset = datasets.load_dataset("./my_yelp_review_full.py", cache_dir=DATA_DIR)
-
-    def mask_sentences_random(sentences, tokenizer, n_sentences=10, p=0.3):
+    def mask_sentences_random(sentences, tokenizer, n_sentences, p):
         tokenized_sentences = tokenizer(sentences)['input_ids']
         masked_sentences = []
 
@@ -67,7 +59,7 @@ def main():
 
         return masked_sentences
 
-    def mask_by_entropy(example, p=0.5):
+    def mask_by_entropy(example, n_sentences, p):
         """
         example: a string with multiple sentences. i.e. "sent1. sent2. blahblah. sent3. sent4."
         """
@@ -75,7 +67,7 @@ def main():
         sent_tokenized_example = sent_tokenize_and_strip(example) # list of string
 
         # mask each sent_tokenized sentence
-        masked_candidates = mask_sentences_random(sent_tokenized_example, tokenizer, p=p) # list of list of string
+        masked_candidates = mask_sentences_random(sent_tokenized_example, tokenizer, n_sentences=n_sentences, p=p) # list of list of string
         # append original sent for entropy filtering
         for i in range(len(sent_tokenized_example)):
             masked_candidates[i].insert(0, sent_tokenized_example[i])
@@ -97,29 +89,34 @@ def main():
     def preprocess_data(examples):
         return tokenizer(examples['text'], truncation=True)
 
+    yelp_dataset = load_dataset('json', data_files=args.in_data, cache_dir=DATA_CACHE_DIR)
     tokenized_dataset = yelp_dataset.map(preprocess_data, batched=True)
 
     masked_outputs = []
-    examples = tokenized_dataset['train']['text'][450000:]
-    labels = tokenized_dataset['train']['label'][450000:]
     excepted_texts_train = []
-    for i in tqdm(range(len(examples)), desc="masking"):
-        example = examples[i]
-        label = labels[i]
+    for d in tqdm(tokenized_dataset['train'], desc="masking"):
         try:
-            masked_text = mask_by_entropy(example, p=0.7)
-            masked_outputs.append({"text": example,
-                                "label": label,
-                                "masked_text": masked_text,
-                                })
+            masked_text = mask_by_entropy(d['text'], args.n_sentences, args.mask_p)
+            masked_outputs.append({
+                "text": d['text'],
+                "label": d['label'],
+                "masked_text": masked_text,
+            })
         except:
-            excepted_texts_train.append({"text": example, "label": label})
-            continue
-    out_file = os.path.join(DATA_DIR, 'masked_yelp_train_7.json_3')
-    with open(out_file, 'w') as json_f:
-        json.dump(masked_outputs, json_f)
+            excepted_texts_train.append(d)
+    print(f"{len(excepted_texts_train):,} out of {len(tokenized_dataset):,} samples skipped due to error!")
+    with jsonlines.open(args.out_data, 'w') as writer:
+        writer.write_all(masked_outputs)
     print("done!")
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--model_name_or_path', type=str, required=True)
+    parser.add_argument('--in_data', type=str, required=True)
+    parser.add_argument('--out_data', type=str, required=True)
+    parser.add_argument('--mask_p', type=float, required=True)
+    parser.add_argument('--n_sentences', type=int, default=10)
+    parser.add_argument('--max_len', type=int, default=512)
+    args = parser.parse_args()
+    main(args)
