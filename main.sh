@@ -15,16 +15,18 @@ if [ "$1" = "train_classification" ]; then
     --model_name_or_path "$MODEL_NAME" \
     --subsample_ratio 0.01 \
     --output_dir "$MODEL_OUT_DIR" \
-    --evaluation_strategy steps \
-    --eval_steps 1000 \
     --learning_rate 2e-5 \
     --fp16 \
-    --per_device_train_batch_size 32 \
-    --gradient_accumulation_steps 2 \
+    --evaluation_strategy steps \
+    --load_best_model_at_end \
+    --metric_for_best_model 'accuracy' \
+    --per_device_train_batch_size 64 \
     --per_device_eval_batch_size 64 \
-    --num_train_epochs 140 \
+    --eval_every_n_epochs 1 \
+    --early_stopping_patience 10 \
+    --num_train_epochs 100 \
     --weight_decay 0.01 \
-    --save_total_limit 15 \
+    --save_total_limit 1 \
     --seed 42
 fi
 
