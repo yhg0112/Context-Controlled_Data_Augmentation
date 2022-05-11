@@ -1,10 +1,12 @@
 import csv
 import random
-import os
+import argparse
 from collections import defaultdict
 
+import jsonlines
 
-def load_data(filepath):
+
+def load_csv_data(filepath):
     new_data = []
     with open(filepath, encoding="utf-8") as f:
         data = csv.reader(f, delimiter=",", quoting=csv.QUOTE_NONNUMERIC)
@@ -35,30 +37,22 @@ def balanced_samples(data, size):
     return sample_set, sum(cache.values(), [])
 
 
-def main():
-    train_data_path = "./data/text_gen/yelp/yelp_review_full_csv/train.csv"
-    seed = 42
-    subsample_ratio = 0.01
-
-    train_data = load_data(train_data_path)
-    num_labels = len(set(d['label'] for d in train_data))
-    num_subsample_per_label = int(len(train_data) * subsample_ratio / num_labels)
-
-    random.seed(seed)
-    subsampled_data, _ = balanced_samples(train_data, num_subsample_per_label)
-
-    out_dir = f"./data/text_gen/yelp/yelp_review_subsample={subsample_ratio}_seed={seed}_csv"
+def main(args):
+    # load data
+    in_data = "./data/yelp_full_test.jsonl"
+    with jsonlines.open(in_data) as reader:
+        full_train_data = list(reader)
+    num_labels = len(set(d['label'] for d in full_train_data))
+    num_subsample_per_label = int(len(full_train_data) * args.subsample_ratio / num_labels)
+    random.seed(args.seed)
+    subsampled_data, _ = balanced_samples(full_train_data, num_subsample_per_label)
 
     print(f"Resulting dataset size: {len(subsampled_data):,}")
 
-    if not os.path.exists(out_dir):
-        os.makedirs(out_dir)
-
-    with open(os.path.join(out_dir, 'train.csv'), 'w', encoding="utf-8") as f:
-        writer = csv.writer(f, delimiter=",", quoting=csv.QUOTE_NONNUMERIC)
-        for d in subsampled_data:
-            writer.writerow((str(d['label']+1), d['text']))
-
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--subsample_ratio', type=float, required=True)
+    args = parser.parse_args()
+    main(args)
