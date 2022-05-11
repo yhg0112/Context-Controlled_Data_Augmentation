@@ -1,3 +1,4 @@
+import os
 import csv
 import random
 import argparse
@@ -6,7 +7,7 @@ from collections import defaultdict
 import jsonlines
 
 
-def load_csv_data(filepath):
+def load_data(filepath):
     new_data = []
     with open(filepath, encoding="utf-8") as f:
         data = csv.reader(f, delimiter=",", quoting=csv.QUOTE_NONNUMERIC)
@@ -48,6 +49,10 @@ def main(args):
     subsampled_data, _ = balanced_samples(full_train_data, num_subsample_per_label)
 
     print(f"Resulting dataset size: {len(subsampled_data):,}")
+
+    out_data = f'./data/yelp_subsample={args.subsample_ratio}_seed={args.seed}_train.jsonl'
+    with jsonlines.open(out_data, 'w') as writer:
+        writer.write_all(subsampled_data)
 
 
 if __name__ == "__main__":
