@@ -1,7 +1,5 @@
 import os
-
-import random
-import jsonlines
+from pathlib import Path
 
 import numpy as np
 from numpy.random import default_rng
@@ -9,38 +7,15 @@ from datasets import load_metric, load_dataset
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, DataCollatorWithPadding, HfArgumentParser, \
     Trainer, TrainingArguments, EarlyStoppingCallback
 
-from subsample_yelp_data import balanced_samples
-
 
 DATA_CACHE_DIR = "./data/.cache"
 
 
 def main(args, training_args):
-    # load data
-    full_train_data_path = './data/yelp_full_train.jsonl'
-    if args.subsample_ratio is not None:
-        train_data_path = f'./data/yelp_subsample={args.subsample_ratio}_seed={training_args.seed}_train.jsonl'
-        if not os.path.exists(train_data_path):
-            print(f"Subsampled dataset with ratio {args.subsample_ratio} file not found.. Creating with seed {training_args.seed}!")
-            with jsonlines.open(full_train_data_path) as reader:
-                full_train_data = list(reader)
-            num_labels = len(set(d['label'] for d in full_train_data))
-            num_subsample_per_label = int(len(full_train_data) * args.subsample_ratio / num_labels)
-
-            random.seed(training_args.seed)
-            subsampled_data, _ = balanced_samples(full_train_data, num_subsample_per_label)
-            print(f"Resulting dataset size: {len(subsampled_data):,}")
-
-            with jsonlines.open(train_data_path, 'w') as writer:
-                writer.write_all(subsampled_data)
-    else:
-        train_data_path = full_train_data_path
-    data_files = {
-        'train': train_data_path,
-        'test': './data/yelp_full_test.jsonl'
-        }
-
-    yelp_dataset = load_dataset('json', data_files=data_files, cache_dir=DATA_CACHE_DIR)
+    yelp_dataset = load_dataset('json', data_files={
+        'train': args.train_data_paths,
+        'test': args.test_data_path,
+    }, cache_dir=DATA_CACHE_DIR)
 
     # Convert eval_every_n_epochs to eval_steps
     train_data_size = len(yelp_dataset['train'])
@@ -87,11 +62,19 @@ def main(args, training_args):
     )
 
     trainer.train()
-    trainer.evaluate(tokenized_dataset['test'], "")
+
+    # create symbole link of best chekpoint for easy access
+    best_model_ckpt_path = Path(trainer.state.best_model_checkpoint).resolve()
+    os.symlink(best_model_ckpt_path, best_model_ckpt_path.parent / 'checkpoint-best')
+
+    # final evaluation on full test data
+    trainer.evaluate(tokenized_dataset['test'], metric_key_prefix="full_eval")
 
 
 if __name__ == "__main__":
     parser = HfArgumentParser((TrainingArguments,))
+    parser.add_argument('--train_data_paths', nargs='+', default=[])
+    parser.add_argument('--test_data_path', type=str, required=True)
     parser.add_argument('--subsample_ratio', type=float, default=None)
     parser.add_argument('--model_name_or_path', type=str, default='roberta-base')
     parser.add_argument('--eval_every_n_epochs', type=float, default=0.5)
