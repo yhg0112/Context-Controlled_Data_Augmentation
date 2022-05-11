@@ -57,7 +57,7 @@ def main(args, training_args):
     gen_model.resize_token_embeddings(len(gen_tokenizer))
 
     yelp_dataset = load_dataset('json', data_files=args.in_data, cache_dir=DATA_CACHE_DIR, split='train')
-    yelp_dataset = yelp_dataset.train_test_split(test_size=0.1, seed=training_args.seed)
+    yelp_dataset = yelp_dataset.train_test_split(test_size=args.test_split_size, seed=training_args.seed)
     tokenized_yelp_dataset = load_tokenized_dataset(yelp_dataset, tokenizer=gen_tokenizer, max_len=512)
 
 
@@ -117,5 +117,6 @@ if __name__ == "__main__":
     parser.add_argument('--model_name_or_path', type=str, required=True)
     parser.add_argument('--eval_every_n_epochs', type=float, default=0.5)
     parser.add_argument('--early_stopping_patience', type=int, default=10)
+    parser.add_argument('--test_split_size', type=float, default=0.1)
     training_args, additional_args = parser.parse_args_into_dataclasses()
     main(additional_args, training_args)

@@ -84,7 +84,7 @@ def main(args):
         return tokenized_datasets
 
     masked_dataset = load_dataset('json', data_files=args.in_data, cache_dir=DATA_CACHE_DIR, split='train')
-    masked_dataset = masked_dataset.train_test_split(test_size=0.1, seed=args.seed)
+    masked_dataset = masked_dataset.train_test_split(test_split_size=args.test_split_size, seed=args.seed)
     # tokenized_masked_test_dataset = load_tokenized_dataset(masked_dataset['test'], tokenizer=gen_tokenizer, max_len=args.max_len)
 
     generated_dataset = generate(gen_model, gen_tokenizer, masked_dataset['test'], args.batch_size, prefixes, flip_label=False)
@@ -104,6 +104,7 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--max_len', type=int, default=512)
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--test_split_size', type=float, default=0.1)
     args = parser.parse_args()
     print(args)
     main(args)
