@@ -39,10 +39,12 @@ def balanced_samples(data, size):
 
 
 def main(args):
+    print("Subsampling data with ratio {} and seed {}".format(args.subsample_ratio, args.seed))
     # load data
-    in_data = "./data/yelp_full_test.jsonl"
+    in_data = "./data/yelp_full_train.jsonl"
     with jsonlines.open(in_data) as reader:
         full_train_data = list(reader)
+    print(f"Full dataset size: {len(full_train_data):,}")
     num_labels = len(set(d['label'] for d in full_train_data))
     num_subsample_per_label = int(len(full_train_data) * args.subsample_ratio / num_labels)
     random.seed(args.seed)
