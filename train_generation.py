@@ -1,5 +1,7 @@
-import numpy as np
+import os
+from pathlib import Path
 
+import numpy as np
 from datasets import load_dataset, load_metric
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, EarlyStoppingCallback, HfArgumentParser, DataCollatorForSeq2Seq, \
     Seq2SeqTrainingArguments, Seq2SeqTrainer
@@ -103,6 +105,10 @@ def main(args, training_args):
     )
 
     trainer.train()
+
+    # create symbole link of best chekpoint for easy access
+    best_model_ckpt_path = Path(trainer.state.best_model_checkpoint).resolve()
+    os.symlink(best_model_ckpt_path, best_model_ckpt_path.parent / 'checkpoint-best')
 
 
 if __name__ == "__main__":
